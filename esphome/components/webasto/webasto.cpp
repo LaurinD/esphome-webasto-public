@@ -109,19 +109,167 @@ bool Webasto::rx_msg2(uint8_t* dat, uint8_t len) {
 }
 
 // ----- Befehle -----
-void Webasto::VentOn(uint8_t t_on_mins){ /* Code aus Header übernehmen */ }
+void Webasto::VentOn(uint8_t t_on_mins) {
+    ESP_LOGD(TAG,"Send VentOn");
+    uint8_t tx_dat[] = {WBUS_CMD_ON_VENT, t_on_mins};
+    uint8_t rx_dat[sizeof(tx_dat)];
+    for(uint8_t i=0;i<3;i++){
+        SendBreak();
+        if(!tx_msg2(tx_dat,sizeof(tx_dat))){ ESP_LOGE(TAG,"VentOn !tx_ok"); continue; }
+        if(!rx_msg2(rx_dat,sizeof(rx_dat))){ ESP_LOGE(TAG,"VentOn !rx_ok"); continue; }
+        if((tx_dat[0]|0x80)!=rx_dat[0]){ ESP_LOGE(TAG,"VentOn !cmd_ok"); continue; }
+        if(tx_dat[1]!=rx_dat[1]){ ESP_LOGE(TAG,"VentOn !subcmd_ok"); continue; }
+        keep_alive_cmd=WBUS_CMD_ON_VENT;
+        keep_alive_time=(unsigned long)t_on_mins*60*1000;
+        break;
+    }
+}
 void Webasto::VentOn(){ VentOn(1); }
-void Webasto::HeatOn(uint8_t t_on_mins){ /* Code aus Header übernehmen */ }
+
+void Webasto::HeatOn(uint8_t t_on_mins) {
+    ESP_LOGD(TAG,"Send HeatOn");
+    uint8_t tx_dat[] = {WBUS_CMD_ON_PH, t_on_mins};
+    uint8_t rx_dat[sizeof(tx_dat)];
+    for(uint8_t i=0;i<3;i++){
+        SendBreak();
+        if(!tx_msg2(tx_dat,sizeof(tx_dat))){ ESP_LOGE(TAG,"HeatOn !tx_ok"); continue; }
+        if(!rx_msg2(rx_dat,sizeof(rx_dat))){ ESP_LOGE(TAG,"HeatOn !rx_ok"); continue; }
+        if((tx_dat[0]|0x80)!=rx_dat[0]){ ESP_LOGE(TAG,"HeatOn !cmd_ok"); continue; }
+        if(tx_dat[1]!=rx_dat[1]){ ESP_LOGE(TAG,"HeatOn !subcmd_ok"); continue; }
+        keep_alive_cmd=WBUS_CMD_ON_PH;
+        keep_alive_time=(unsigned long)t_on_mins*60*1000;
+        break;
+    }
+}
 void Webasto::HeatOn(){ HeatOn(1); }
-void Webasto::Off(){ /* Code aus Header übernehmen */ }
-void Webasto::KeepAlive(){ /* Code aus Header übernehmen */ }
+
+void Webasto::Off() {
+    ESP_LOGD(TAG,"Send Off");
+    uint8_t tx_dat[]={WBUS_CMD_OFF};
+    uint8_t rx_dat[sizeof(tx_dat)];
+    for(uint8_t i=0;i<3;i++){
+        SendBreak();
+        if(!tx_msg2(tx_dat,sizeof(tx_dat))){ ESP_LOGE(TAG,"Off !tx_ok"); continue; }
+        if(!rx_msg2(rx_dat,sizeof(rx_dat))){ ESP_LOGE(TAG,"Off !rx_ok"); continue; }
+        if((tx_dat[0]|0x80)!=rx_dat[0]){ ESP_LOGE(TAG,"Off !cmd_ok"); continue; }
+        keep_alive_cmd=0;
+        keep_alive_time=0;
+        break;
+    }
+}
+
+void Webasto::KeepAlive() {
+    const unsigned long periode=10000;
+    unsigned long now=millis();
+    static unsigned long last=now-periode;
+    if(now-last>=periode){
+        last+=periode;
+        if(keep_alive_cmd>0 && keep_alive_time>0){
+            ESP_LOGD(TAG,"Send KeepAlive");
+            uint8_t tx_dat[]={WBUS_CMD_CHK, keep_alive_cmd, 0};
+            uint8_t rx_dat[2];
+            for(uint8_t i=0;i<3;i++){
+                SendBreak();
+                if(!tx_msg2(tx_dat,sizeof(tx_dat))){ ESP_LOGE(TAG,"KeepAlive !tx_ok"); continue; }
+                if(!rx_msg2(rx_dat,sizeof(rx_dat))){ ESP_LOGE(TAG,"KeepAlive !rx_ok"); continue; }
+                if((tx_dat[0]|0x80)!=rx_dat[0]){ ESP_LOGE(TAG,"KeepAlive !cmd_ok"); continue; }
+                if(keep_alive_time>periode) keep_alive_time-=periode;
+                else keep_alive_time=0;
+                break;
+            }
+        }
+        if(keep_alive_cmd>0 && keep_alive_time<30000){
+            ESP_LOGD(TAG,"Send ReNew");
+            if(keep_alive_cmd==WBUS_CMD_ON_VENT) VentOn(1);
+            if(keep_alive_cmd==WBUS_CMD_ON_PH) HeatOn(1);
+        }
+    }
+}
 
 // ----- State lesen -----
-void Webasto::get_state_50_03(){ /* Code aus Header übernehmen */ }
-void Webasto::get_state_50_04(){ /* Code aus Header übernehmen */ }
-void Webasto::get_state_50_05(){ /* Code aus Header übernehmen */ }
-void Webasto::get_state_50_06(){ /* Code aus Header übernehmen */ }
-void Webasto::get_state_50_07(){ /* Code aus Header übernehmen */ }
+// ----- State lesen -----
+void Webasto::get_state_50_03() {
+    uint8_t dat[1]={0x50};
+    uint8_t rx[1];
+    SendBreak();
+    if(!tx_msg2(dat,1)){ ESP_LOGE(TAG,"get_state_50_03 !tx"); return; }
+    if(!rx_msg2(rx,1)){ ESP_LOGE(TAG,"get_state_50_03 !rx"); return; }
 
-void Webasto::setup(){}
-void Webasto::loop(){ /* Code aus Header übernehmen */ }
+    state_50_03.heat_request    = rx[0] & 0x01;
+    state_50_03.vent_request    = rx[0] & 0x02;
+    state_50_03.bit3            = rx[0] & 0x04;
+    state_50_03.bit4            = rx[0] & 0x08;
+    state_50_03.combustion_fan  = rx[0] & 0x10;
+    state_50_03.glowplug        = rx[0] & 0x20;
+    state_50_03.fuel_pump       = rx[0] & 0x40;
+    state_50_03.nozzle_heating  = rx[0] & 0x80;
+}
+
+void Webasto::get_state_50_04() {
+    uint8_t dat[1]={0x50};
+    uint8_t rx[3];
+    SendBreak();
+    if(!tx_msg2(dat,1)){ ESP_LOGE(TAG,"get_state_50_04 !tx"); return; }
+    if(!rx_msg2(rx,3)){ ESP_LOGE(TAG,"get_state_50_04 !rx"); return; }
+
+    state_50_04.glowplug       = rx[0];
+    state_50_04.fuel_pump      = rx[1];
+    state_50_04.combustion_fan = rx[2];
+}
+
+void Webasto::get_state_50_05() {
+    uint8_t dat[1]={0x50};
+    uint8_t rx[6];
+    SendBreak();
+    if(!tx_msg2(dat,1)){ ESP_LOGE(TAG,"get_state_50_05 !tx"); return; }
+    if(!rx_msg2(rx,6)){ ESP_LOGE(TAG,"get_state_50_05 !rx"); return; }
+
+    state_50_05.temperature      = ((rx[0]<<8)|rx[1]) * 0.1;
+    state_50_05.voltage          = ((rx[2]<<8)|rx[3]) * 0.01;
+    state_50_05.glowplug_resistance = ((rx[4]<<8)|rx[5]) * 0.1;
+}
+
+void Webasto::get_state_50_06() {
+    uint8_t dat[1]={0x50};
+    uint8_t rx[5];
+    SendBreak();
+    if(!tx_msg2(dat,1)){ ESP_LOGE(TAG,"get_state_50_06 !tx"); return; }
+    if(!rx_msg2(rx,5)){ ESP_LOGE(TAG,"get_state_50_06 !rx"); return; }
+
+    state_50_06.working_hours   = (rx[0]<<8 | rx[1]) * 0.1;
+    state_50_06.operating_hours = (rx[2]<<8 | rx[3]) * 0.1;
+    state_50_06.start_counter   = rx[4];
+}
+
+void Webasto::get_state_50_07() {
+    uint8_t dat[1]={0x50};
+    uint8_t rx[1];
+    SendBreak();
+    if(!tx_msg2(dat,1)){ ESP_LOGE(TAG,"get_state_50_07 !tx"); return; }
+    if(!rx_msg2(rx,1)){ ESP_LOGE(TAG,"get_state_50_07 !rx"); return; }
+
+    state_50_07.op_state = rx[0];
+}
+
+void Webasto::setup() {}
+
+void Webasto::loop() {
+    static uint8_t state=0;
+    switch(state++){
+        case 0: KeepAlive(); break;
+        case 1: get_state_50_03(); break;
+        case 2: get_state_50_04(); break;
+        case 3: get_state_50_05(); break;
+        case 4: get_state_50_06(); break;
+        case 5: get_state_50_07(); break;
+        default: state=0; break;
+    }
+
+    char logbuf[130]; logbuf[0]='\0';
+    while(_uart_comp->available()){
+        uint8_t rx;
+        _uart_comp->read_byte(&rx);
+        sprintf(logbuf,"%s %02X",logbuf,rx);
+    }
+    if(logbuf[0]!='\0') ESP_LOGD(TAG,"%010ld, RX: %s",millis(),logbuf);
+}
